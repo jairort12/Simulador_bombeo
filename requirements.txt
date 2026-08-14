@@ -4,3 +4,4 @@ matplotlib
 plotly
 fluids
 CoolProp
+pandas
