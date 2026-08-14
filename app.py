@@ -4,6 +4,8 @@ import plotly.graph_objects as go
 import plotly.express as px
 import fluids
 from CoolProp.CoolProp import PropsSI
+import pandas as pd
+import io
 
 st.set_page_config(page_title="Simulador de Bombeo Avanzado", layout="wide")
 
@@ -80,3 +82,51 @@ fig3d.update_layout(
     margin=dict(l=0, r=0, b=0, t=40)
 )
 st.plotly_chart(fig3d, use_container_width=True)
+
+# 5. Tabla de Resultados Interactiva
+st.subheader("📊 Tabla de Resultados Numéricos")
+st.write("Explora los valores exactos. Puedes ordenar las columnas haciendo clic en los encabezados.")
+
+# Simulemos el cálculo de una pérdida de carga (fricción) proporcional al cuadrado del caudal 
+# para hacer la tabla más interesante (como pasará en el caso Clorox)
+factor_friccion_simulado = 0.05 
+perdidas_carga = factor_friccion_simulado * (caudales_Lps ** 2)
+
+# Creamos un Diccionario con los datos que queremos tabular
+datos_tabla = {
+    "Caudal (L/s)": caudales_Lps,
+    "Potencia Útil (kW)": potencia_2d_kw * eficiencia_decimal, # Potencia hidráulica
+    "Potencia Eléctrica (kW)": potencia_2d_kw,                # Potencia consumida
+    "Pérdida de Carga Estimada (mca)": perdidas_carga
+}
+
+# Convertimos el diccionario en un DataFrame de Pandas
+df_resultados = pd.DataFrame(datos_tabla)
+
+# Redondeamos los valores a 2 decimales para que se vea más limpio
+df_resultados = df_resultados.round(2)
+
+# Mostramos el DataFrame en Streamlit
+# use_container_width=True hace que la tabla ocupe todo el ancho disponible
+st.dataframe(df_resultados, use_container_width=True, hide_index=True)
+
+# 6. Botón de exportación a Excel
+st.write("---") # Una línea divisoria visual
+
+# a. Crear un espacio en memoria (buffer)
+buffer = io.BytesIO()
+
+# b. Escribir el DataFrame en ese espacio usando openpyxl
+with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+    df_resultados.to_excel(writer, index=False, sheet_name='Resultados Simulación')
+
+# c. Obtener los bytes del archivo Excel
+archivo_excel = buffer.getvalue()
+
+# d. Renderizar el botón en Streamlit
+st.download_button(
+    label="📥 Descargar resultados en Excel",
+    data=archivo_excel,
+    file_name="Simulacion_Clorox.xlsx",
+    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+)

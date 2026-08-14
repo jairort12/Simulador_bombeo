@@ -5,3 +5,4 @@ plotly
 fluids
 CoolProp
 pandas
+openpyxl
