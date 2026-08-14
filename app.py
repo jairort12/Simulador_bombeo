@@ -1,18 +1,41 @@
-# -*- coding: utf-8 -*-
-"""
-Created on Thu Aug 13 19:43:41 2026
-
-@author: user
-"""
-
 import streamlit as st
 import numpy as np
 import matplotlib.pyplot as plt
 import fluids
 from CoolProp.CoolProp import PropsSI
 
-# 1. Configuración de la página
 st.set_page_config(page_title="Simulador de Bombeo Básico", layout="wide")
+
+# --- INICIO DEL BLOQUE DE SEGURIDAD ---
+def verificar_contrasena():
+    """Devuelve True si el usuario ingresó la contraseña correcta."""
+    
+    def contrasena_ingresada():
+        """Comprueba si la contraseña es correcta."""
+        if st.session_state["contrasena"] == st.secrets["password_cliente"]:
+            st.session_state["contrasena_correcta"] = True
+            del st.session_state["contrasena"]  # Borra la contraseña por seguridad
+        else:
+            st.session_state["contrasena_correcta"] = False
+
+    if "contrasena_correcta" not in st.session_state:
+        # Primera vez: Muestra la caja de texto
+        st.text_input("🔑 Ingrese la contraseña de acceso:", type="password", on_change=contrasena_ingresada, key="contrasena")
+        return False
+    elif not st.session_state["contrasena_correcta"]:
+        # Contraseña incorrecta
+        st.text_input("🔑 Ingrese la contraseña de acceso:", type="password", on_change=contrasena_ingresada, key="contrasena")
+        st.error("🚫 Contraseña incorrecta.")
+        return False
+    else:
+        # Contraseña correcta
+        return True
+
+# Detiene la ejecución si la contraseña no es correcta
+if not verificar_contrasena():
+    st.stop()
+# --- FIN DEL BLOQUE DE SEGURIDAD ---
+
 st.title("🚰 Simulador de Bombeo - Prueba de Concepto")
 st.write("Cálculo de potencia requerida usando Bernoulli y propiedades de CoolProp.")
 
