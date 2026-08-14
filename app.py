@@ -6,8 +6,9 @@ import fluids
 from CoolProp.CoolProp import PropsSI
 import pandas as pd
 import io
-
+import math
 st.set_page_config(page_title="Simulador de Bombeo Avanzado", layout="wide")
+
 
 # --- INICIO DEL BLOQUE DE SEGURIDAD ---
 def verificar_contrasena():
@@ -32,101 +33,122 @@ if not verificar_contrasena():
     st.stop()
 # --- FIN DEL BLOQUE DE SEGURIDAD ---
 
-st.title("🚰 Simulador de Bombeo - Motor Plotly")
+st.title("⚙️ Simulador de Bomba de Engranajes y Pérdidas de Carga")
 
-# 1. Barra lateral
-st.sidebar.header("Parámetros del Sistema")
-altura_fija = st.sidebar.slider("Diferencia de altura actual (m)", min_value=1.0, max_value=50.0, value=10.0, step=1.0)
-eficiencia = st.sidebar.slider("Eficiencia de la bomba (%)", min_value=10, max_value=100, value=75, step=5)
-temp_agua = st.sidebar.slider("Temperatura del agua (°C)", min_value=5.0, max_value=90.0, value=25.0, step=1.0)
+# ==========================================
+# 1. BARRA LATERAL (INPUTS DEL SISTEMA)
+# ==========================================
+st.sidebar.header("Parámetros de la Bomba")
+cilindrada_cm3 = st.sidebar.number_input("Cilindrada (cm³/rev)", value=15.0)
+rpm = st.sidebar.slider("Revoluciones del Motor (RPM)", 500, 3000, 1450, 50)
+presion_bypass_bar = st.sidebar.number_input("Tarado Válvula de Alivio (bar)", value=5.0)
+coef_slip = st.sidebar.number_input("Coeficiente de Slip (Cs)", value=1.2e-12, format="%e")
 
-# 2. Cálculos físicos base
-densidad = PropsSI('D', 'T', temp_agua + 273.15, 'P', 101325, 'Water')
-gravedad = 9.81
-eficiencia_decimal = eficiencia / 100.0
+st.sidebar.header("Parámetros de Tubería y Fluido")
+diametro_mm = st.sidebar.slider("Diámetro interno tubería (mm)", 3.0, 25.0, 9.5) # 3/8 pulgada aprox
+longitud_m = st.sidebar.number_input("Longitud total (m)", value=7.0)
+k_valvulas = st.sidebar.number_input("Suma de K (Solenoide + Orificio 1/8)", value=50.0)
+viscosidad_cp = st.sidebar.number_input("Viscosidad (cP)", value=1.0) # Similar al agua
+densidad = 1000 # kg/m3
 
-col1, col2 = st.columns(2)
-col1.metric("Densidad del agua", f"{densidad:.2f} kg/m³")
+# Conversiones a SI
+Vd = cilindrada_cm3 * 1e-6 # m3/rev
+D = diametro_mm / 1000.0 # m
+Area = math.pi * (D**2) / 4.0
+mu = viscosidad_cp / 1000.0 # Pa.s
+presion_bypass_pa = presion_bypass_bar * 1e5
 
-# 3. Gráfico 2D Interactivo (Potencia vs Caudal para la altura fija)
-caudales_Lps = np.linspace(0.1, 10, 50)
-potencia_2d_kw = ((densidad * gravedad * altura_fija * (caudales_Lps / 1000)) / eficiencia_decimal) / 1000
+# ==========================================
+# 2. SECCIÓN ACADÉMICA (LATEX)
+# ==========================================
+with st.expander("📖 Ver Ecuaciones del Modelo Matemático"):
+    st.write("El sistema evalúa el punto de convergencia donde la presión requerida por la red iguala el caudal real de la bomba tras sufrir pérdidas volumétricas por deslizamiento (slip).")
+    
+    st.subheader("Curva Resistente del Sistema")
+    st.latex(r"\Delta P_{sys} = \left( f \frac{L}{D} + \sum K \right) \frac{\rho v^2}{2}")
+    
+    st.subheader("Caudal de la Bomba de Engranajes")
+    st.latex(r"Q_{teo} = V_d \times \frac{N}{60}")
+    st.latex(r"Q_{slip} = C_s \frac{\Delta P_{sys}}{\mu}")
+    st.latex(r"Q_{real} = Q_{teo} - Q_{slip}")
 
-col2.metric("Potencia requerida a 5 L/s", f"{np.interp(5, caudales_Lps, potencia_2d_kw):.2f} kW")
+# ==========================================
+# 3. ALGORITMO ITERATIVO (SOLVER)
+# ==========================================
+st.header("Análisis Transitorio (Válvula Abierta)")
 
-st.subheader("Curva de Rendimiento 2D")
-fig2d = px.line(x=caudales_Lps, y=potencia_2d_kw, 
-                labels={'x': 'Caudal (L/s)', 'y': 'Potencia (kW)'},
-                title=f"Potencia vs Caudal (Altura: {altura_fija} m)")
-fig2d.update_traces(line=dict(color="#1f77b4", width=3))
-st.plotly_chart(fig2d, use_container_width=True)
+Q_teo = Vd * (rpm / 60.0) # m3/s
+Q_real = Q_teo # Valor inicial asumido
 
-# 4. Gráfico 3D de Superficie (Potencia evaluando múltiples alturas y caudales)
-st.subheader("Exploración 3D del Sistema")
+tolerancia = 1e-7
+error = 1.0
+iteraciones = 0
+max_iter = 100
 
-alturas_array = np.linspace(1, 50, 50)
-# Crear una malla (grid) para cruzar todas las alturas con todos los caudales
-Q_mesh, H_mesh = np.meshgrid(caudales_Lps, alturas_array)
+# Bucle While para encontrar la convergencia
+while error > tolerancia and iteraciones < max_iter:
+    # 1. Calcular velocidad en la tubería
+    v = Q_real / Area
+    
+    # 2. Calcular fricción (Asumimos turbulento simplificado o factor constante para el ejemplo)
+    # En un modelo real robusto, aquí usarías fluids.friction.friction_factor
+    f = 0.025 
+    
+    # 3. Calcular caída de presión del sistema (Pa)
+    P_sys = (f * (longitud_m / D) + k_valvulas) * (densidad * v**2) / 2.0
+    
+    # 4. Calcular Slip
+    Q_slip = coef_slip * (P_sys / mu)
+    
+    # 5. Nuevo caudal real (evitando caudales negativos si el slip es masivo)
+    Q_nuevo = max(0.0, Q_teo - Q_slip)
+    
+    # 6. Evaluar error y actualizar
+    error = abs(Q_nuevo - Q_real)
+    Q_real = Q_nuevo
+    iteraciones += 1
 
-# Calcular la potencia para cada punto de la malla
-P_mesh_kw = ((densidad * gravedad * H_mesh * (Q_mesh / 1000)) / eficiencia_decimal) / 1000
+# ==========================================
+# 4. RESULTADOS Y ALERTAS
+# ==========================================
+Q_real_lpm = Q_real * 60000.0
+Q_teo_lpm = Q_teo * 60000.0
+P_sys_bar = P_sys / 1e5
 
-fig3d = go.Figure(data=[go.Surface(z=P_mesh_kw, x=caudales_Lps, y=alturas_array, colorscale='Viridis')])
-fig3d.update_layout(
-    title='Potencia Requerida vs Caudal y Altura',
-    scene=dict(
-        xaxis_title='Caudal (L/s)',
-        yaxis_title='Altura (m)',
-        zaxis_title='Potencia (kW)'
-    ),
-    margin=dict(l=0, r=0, b=0, t=40)
-)
-st.plotly_chart(fig3d, use_container_width=True)
+col1, col2, col3 = st.columns(3)
+col1.metric("Caudal Teórico (L/min)", f"{Q_teo_lpm:.2f}")
+col2.metric("Caudal Real Final (L/min)", f"{Q_real_lpm:.2f}", delta=f"-{(Q_teo_lpm - Q_real_lpm):.2f} Slip", delta_color="inverse")
+col3.metric("Contrapresión del Sistema", f"{P_sys_bar:.2f} bar")
 
-# 5. Tabla de Resultados Interactiva
-st.subheader("📊 Tabla de Resultados Numéricos")
-st.write("Explora los valores exactos. Puedes ordenar las columnas haciendo clic en los encabezados.")
+# Lógica de la Válvula Bypass
+st.write("---")
+if P_sys_bar > presion_bypass_bar:
+    st.error(f"🚨 **¡ALERTA DE BYPASS!** La contrapresión ({P_sys_bar:.2f} bar) supera el tarado de la válvula de alivio ({presion_bypass_bar} bar). El fluido recirculará y el caudal a la salida caerá a cero.")
+else:
+    st.success("✅ El sistema opera por debajo de la presión de alivio.")
 
-# Simulemos el cálculo de una pérdida de carga (fricción) proporcional al cuadrado del caudal 
-# para hacer la tabla más interesante (como pasará en el caso Clorox)
-factor_friccion_simulado = 0.05 
-perdidas_carga = factor_friccion_simulado * (caudales_Lps ** 2)
+# ==========================================
+# 5. GRÁFICA DE CONVERGENCIA
+# ==========================================
+st.subheader("Punto de Operación del Sistema")
 
-# Creamos un Diccionario con los datos que queremos tabular
-datos_tabla = {
-    "Caudal (L/s)": caudales_Lps,
-    "Potencia Útil (kW)": potencia_2d_kw * eficiencia_decimal, # Potencia hidráulica
-    "Potencia Eléctrica (kW)": potencia_2d_kw,                # Potencia consumida
-    "Pérdida de Carga Estimada (mca)": perdidas_carga
-}
+# Generar curvas para graficar
+caudales_plot = np.linspace(0, Q_teo * 1.2, 50)
+p_sistema_plot = (f * (longitud_m / D) + k_valvulas) * (densidad * (caudales_plot/Area)**2) / 2.0 / 1e5
 
-# Convertimos el diccionario en un DataFrame de Pandas
-df_resultados = pd.DataFrame(datos_tabla)
+# Curva teórica de la bomba (Slip)
+p_bomba_plot = np.linspace(0, presion_bypass_bar * 1.5, 50)
+q_bomba_plot = np.maximum(0, Q_teo - (coef_slip * (p_bomba_plot * 1e5) / mu))
 
-# Redondeamos los valores a 2 decimales para que se vea más limpio
-df_resultados = df_resultados.round(2)
+fig = go.Figure()
+# Curva del Sistema
+fig.add_trace(go.Scatter(x=caudales_plot*60000, y=p_sistema_plot, mode='lines', name='Curva del Sistema (Resistencia)', line=dict(color='red', width=3)))
+# Curva de la Bomba
+fig.add_trace(go.Scatter(x=q_bomba_plot*60000, y=p_bomba_plot, mode='lines', name='Curva de Bomba (con Slip)', line=dict(color='blue', width=3)))
+# Punto de operación
+fig.add_trace(go.Scatter(x=[Q_real_lpm], y=[P_sys_bar], mode='markers', name='Punto de Operación', marker=dict(color='green', size=12, symbol='star')))
+# Límite Bypass
+fig.add_hline(y=presion_bypass_bar, line_dash="dash", line_color="orange", annotation_text="Límite Válvula de Alivio")
 
-# Mostramos el DataFrame en Streamlit
-# use_container_width=True hace que la tabla ocupe todo el ancho disponible
-st.dataframe(df_resultados, use_container_width=True, hide_index=True)
-
-# 6. Botón de exportación a Excel
-st.write("---") # Una línea divisoria visual
-
-# a. Crear un espacio en memoria (buffer)
-buffer = io.BytesIO()
-
-# b. Escribir el DataFrame en ese espacio usando openpyxl
-with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-    df_resultados.to_excel(writer, index=False, sheet_name='Resultados Simulación')
-
-# c. Obtener los bytes del archivo Excel
-archivo_excel = buffer.getvalue()
-
-# d. Renderizar el botón en Streamlit
-st.download_button(
-    label="📥 Descargar resultados en Excel",
-    data=archivo_excel,
-    file_name="Simulacion_Clorox.xlsx",
-    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-)
+fig.update_layout(xaxis_title="Caudal (L/min)", yaxis_title="Presión (bar)", template="plotly_white")
+st.plotly_chart(fig, use_container_width=True)
